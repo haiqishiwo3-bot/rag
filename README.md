@@ -1,290 +1,303 @@
-# RAG 知识库问答系统 - 技术架构文档
+# RAG Knowledge Base Q&A System - Technical Architecture
 
-基于 LangChain + Milvus 的企业级 RAG（检索增强生成）知识库问答系统。
+An enterprise-grade RAG (Retrieval-Augmented Generation) knowledge base Q&A system built with LangChain + Milvus.
 
 ---
 
-## 1. 系统架构设计
+## 1. System Architecture
 
-### 整体架构图
+### Overall Architecture
 
 ```
-1. 客户端层 (Client)                                                 
- - 可以是Web/App/网页（前端）                                      
- - 通过restful API调用接口                                     
+1. Client Layer
+ - Web / App / Browser frontend
+ - Communicates via RESTful API
               │
               ▼
-2. 接入层 (Controller)                                                 
- - FastAPI + Uvicorn + SSE 流式输出                       
- - /upload 接口 ，功能为文件上传                       
- - /ask 接口 ，功能为问题问答
- - /token 接口 ，功能为使用的token统计
+2. Controller Layer
+ - FastAPI + Uvicorn + SSE streaming
+ - /upload endpoint — file upload
+ - /ask endpoint — question answering
+ - /token endpoint — token usage statistics
                │
                ▼
-3. 服务层 (Service)                                                 
- - 会话管理（使用Session History进行会话管理）                     
- - RAG 查询流程                       
- - 文件上传流程
+3. Service Layer
+ - Session management (using Session History)
+ - RAG query pipeline
+ - File upload pipeline
  ┌────────────────────┼───────────────┐
  ▼                    ▼               ▼
 ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│   模型层       │ │   数据层      │ │   工具层       │
-│   (Model)     │ │   (向量DB)    │ │   (Util)      │
+│   Model Layer │ │   Data Layer  │ │   Util Layer  │
+│               │ │  (Vector DB)  │ │               │
 ├───────────────┤ ├───────────────┤ ├───────────────┤
 │ LLM Provider  │ │ Milvus        │ │  FileUtil     │
-│Embeddings     │ │               │ │  TextClean    │
+│ Embeddings    │ │               │ │  TextClean    │
 └───────────────┘ └───────────────┘ └───────────────┘
 ```
 
-### 架构特点
+### Architecture Highlights
 
-| 层次  | 职责             | 技术选型                            |
+| Layer | Responsibility | Technology |
 |-----|----------------|---------------------------------|
-| 接入层 | HTTP 请求处理、流式输出 | FastAPI + SSE                   |
-| 服务层 | 业务逻辑编排、会话管理    | Python Async                    |
-| 模型层 | LLM 调用、向量嵌入    | LangChain  |
-| 数据层 | 向量存储与检索        | Milvus                          |
-| 工具层 | 文件处理、文本清洗      | 自研工具类                           |
+| Controller | HTTP request handling, streaming output | FastAPI + SSE |
+| Service | Business logic orchestration, session management | Python Async |
+| Model | LLM invocation, vector embedding | LangChain |
+| Data | Vector storage and retrieval | Milvus |
+| Util | File processing, text cleaning | Custom utilities |
 
-### 补充
+### Key Design Features
 
-#### 1. 多文档隔离机制
+#### 1. Multi-Document Isolation
 
-**设计目标：** 多文档隔离机制
+**Goal:** Isolate data across multiple documents.
 
-**实现方案：**
- 
-- 集合中增加filename字段，用来存储不同的文件，从数据上进行隔离
-- 多个原始文件存储，使用时间戳区分
+**Implementation:**
+- Add a `filename` field in the collection to store different files, providing data-level isolation.
+- Store multiple original files distinguished by timestamps.
 
 ---
 
-#### 2. 防重复 Embedding 机制
+#### 2. Duplicate Embedding Prevention
 
-**设计目标：** 避免相同内容重复计算向量和存储，节省计算资源和存储空间
+**Goal:** Avoid redundant vector computation and storage for identical content, saving compute resources and storage space.
 
-**实现方案：**
-- 1.数据保存入库时计算文本的MD5哈希
-- 2.查询库中是否有对应的数据
-- 3.如果有则直接返回，不进行计算
-- 4.如果没则存储，并且将MD5哈希也存储在库中
+**Implementation:**
+- 1. Compute MD5 hash of text before saving to the database.
+- 2. Check if the hash already exists in the database.
+- 3. If it exists, return directly without recomputing.
+- 4. If not, store the document along with its MD5 hash.
 
-### 技术栈
+### Tech Stack
 
-| 组件     | 技术                             |
+| Component | Technology |
 |--------|--------------------------------|
-| Web 框架 | FastAPI                        |
-| RAG 框架 | LangChain                      |
-| 向量数据库  | Milvus                         |
-| 嵌入模型   | bge-large-zh-v1.5              |
-| LLM    | OpenAI(仅为openai格式，任何模型都可)+mock |
+| Web Framework | FastAPI |
+| RAG Framework | LangChain |
+| Vector Database | Milvus |
+| Embedding Model | bge-large-zh-v1.5 |
+| LLM | OpenAI-compatible format (any model) + Mock |
 
 ---
 
-## 2. 模块划分
+## 2. Module Structure
 
-### 模块依赖关系
+### Module Dependencies
 
 ```
-controller (控制器层)
+controller
     │
     ▼
-service (服务层)
+service
     │
-    ├──► db (数据访问层)
-    │       └──► model (模型层)
+    ├──► db
+    │       └──► model
     │
-    ├──► model (模型层)
+    ├──► model
     │
-    └──► util (工具层)
+    └──► util
 ```
 
-### 各模块职责
+### Module Responsibilities
 
-| 模块             | 文件                   | 职责            | 核心类/方法                                                                 |
+| Module | File | Responsibility | Key Classes / Methods |
 |----------------|----------------------|---------------|------------------------------------------------------------------------|
-| **controller** | `ragController.py`   | API 路由、请求响应   | `answer() 问答`, `upload_single_file() 上传文件`                             |
-| **service**    | `ragService.py`      | RAG 核心流程、会话管理 | `rag_qa() 问答的业务逻辑`, `rag_file_upload() 上传的业务逻辑`                        |
-| **db**         | `VectorDb.py`        | 向量数据库 CRUD    | `retrieve_documents() 向量库查询数据`, `insert_documents_to_vector() 向量库新增数据` |
-| **model**      | `LlmProvider.py`     | LLM 抽象接口      | `BaseLLMProvider.generate() llm流式输出工厂方法`                               |
-| **model**      | `OpenAiLlm.py`       | OpenAI 兼容实现   | `OpenAiLlm.generate() openai的流式输出方法`                                   |
-| **model**      | `MockAiLlm.py`       | Mock 兼容实现     | `MockAiLlm.generate() mock的流式输出方法`                                     |
-| **model**      | `LocalEmbeddings.py` | 本地嵌入模型        | `embed_query() 单个文本的embeddings`, `embed_documents() 多个文本的embeddings`   |
-| **util**       | `FileUtil.py`        | 文件加载、清洗       | `load_text_file_with_encoding() 文件加载`, `clean_text() 清理文本`             |
+| **controller** | `ragController.py` | API routing, request/response | `answer()`, `upload_single_file()` |
+| **service** | `ragService.py` | RAG core pipeline, session management | `rag_qa()`, `rag_file_upload()` |
+| **db** | `VectorDb.py` | Vector database CRUD | `retrieve_documents()`, `insert_documents_to_vector()` |
+| **model** | `LlmProvider.py` | LLM abstract interface | `BaseLLMProvider.generate()` |
+| **model** | `OpenAiLlm.py` | OpenAI-compatible implementation | `OpenAiLlm.generate()` |
+| **model** | `MockAiLlm.py` | Mock implementation | `MockAiLlm.generate()` |
+| **model** | `LocalEmbeddings.py` | Local embedding model | `embed_query()`, `embed_documents()` |
+| **util** | `FileUtil.py` | File loading, text cleaning | `load_text_file_with_encoding()`, `clean_text()` |
 
-### 模块设计原则
+### Design Principles
 
-1. **单一职责**：每个模块只负责一个功能域
-2. **依赖倒置**：服务层依赖抽象接口（`BaseLLMProvider`），不依赖具体实现
-3. **可替换性**：LLM Provider 可轻松切换（OpenAI / Mock / 其他）
-
----
-
-## 3. RAG 流程说明
-
-### 完整流程
-
-```
-用户提问
-   │
-   ▼
-1. 会话管理                                                 
- - 检查 session_id                                        
- - 加载历史对话记录                                        
- - 生成新 session_id（首次）                              
-
-   │
-   ▼
-2. 向量检索                                                 
- - 使用 Embedding 模型将用户问题向量化                          
- - 在 向量库 中检索 Top-K 相似文档 （需要相似度大于配置的相似度）                        
- - 返回相关文档片段
-   │
-   ▼
-3. Prompt 构建                                              
- - 拼接检索到的上下文                                     
- - 填入 Prompt 模板                                        
- - 添加历史对话记录                                        
-   │
-   ▼
-4. LLM 生成                                                 
- - 流式调用 LLM API                                       
- - 实时返回 Token                                         
- - 统计 Token 使用量                                       
-   │
-   ▼
-5. 响应输出                                                 
- - SSE 流式返回前端                                        
- - 保存对话历史到 session 中                                
-```
+1. **Single Responsibility**: Each module handles one functional domain.
+2. **Dependency Inversion**: The service layer depends on abstractions (`BaseLLMProvider`), not concrete implementations.
+3. **Replaceability**: LLM Provider can be easily swapped (OpenAI / Mock / others).
 
 ---
 
-## 4. Prompt 设计思路
+## 3. RAG Pipeline
 
-### 当前 Prompt 模板
+### Complete Flow
+
+```
+User Question
+   │
+   ▼
+1. Session Management
+ - Check session_id
+ - Load conversation history
+ - Generate new session_id (first visit)
+
+   │
+   ▼
+2. Vector Retrieval
+ - Embed user question using the Embedding model
+ - Retrieve Top-K similar documents from the vector store (similarity must exceed configured threshold)
+ - Return relevant document chunks
+
+   │
+   ▼
+3. Prompt Construction
+ - Concatenate retrieved context
+ - Fill into Prompt template
+ - Append conversation history
+
+   │
+   ▼
+4. LLM Generation
+ - Stream LLM API calls
+ - Return tokens in real time
+ - Track token usage
+
+   │
+   ▼
+5. Response Output
+ - Stream response to frontend via SSE
+ - Save conversation history to session
+```
+
+---
+
+## 4. Prompt Design
+
+### Current Prompt Template
 
 ```python
 PROMPT_CONTENT = """
-你是一位严谨的企业知识库智能助手，严格遵循信息检索原则。请根据以下提供的上下文内容，精准回答用户问题。请遵守以下准则：
-            1. **来源限定**：仅使用上下文中的信息作答，禁止引入外部知识或个人推断。
-            2. **忠实回应**：若上下文中缺乏足够信息，直接回答：“未能检索到相关内容。”不得编造或推测。
-            3. **引用与高亮**：对于答案中的关键事实或数据，并将引用的原文片段用**双星号**高亮显示，并且在引用之后将其引用来源展示，也使用**双星号**高亮显示。
-            4. **回答结构**：先直接回答问题，再附上引用说明。保持回答简洁、相关，避免冗余。
-            
-            上下文：
+You are a rigorous enterprise knowledge base assistant that strictly follows information retrieval principles. Answer the user's question precisely based on the provided context. Follow these rules:
+            1. **Source Limitation**: Only use information from the context. Do not introduce external knowledge or personal inference.
+            2. **Faithful Response**: If the context lacks sufficient information, respond: "No relevant content found." Do not fabricate or speculate.
+            3. **Citation & Highlighting**: Highlight key facts or data in the answer with **double asterisks**, and display the citation source after each reference, also highlighted with **double asterisks**.
+            4. **Answer Structure**: Answer the question directly first, then provide citation details. Keep answers concise and relevant.
+
+            Context:
             {context}
 
-            问题：
+            Question:
             {question}
-            
-            示例回答格式：
-            - 有相关信息：根据上下文，XXX 是...**引用原文**...*来源文件*
-            - 无相关信息：未能检索到相关内容。
-            
-            请开始你的回答：
+
+            Example answer format:
+            - With relevant information: Based on the context, XXX is... **quoted原文**... *source file*
+            - Without relevant information: No relevant content found.
+
+            Please begin your answer:
 """
 ```
 
-### 设计原则
+### Design Principles
 
-| 原则                | 说明     | 实现方式           |
+| Principle | Description | Implementation |
 |-------------------|--------|----------------|
-| **角色设定**          | 明确助手定位 | "严谨的企业知识库智能助手" |
-| **边界约束**          | 限制回答范围 | "仅使用上下文中的信息"   |
-| **防幻觉**           | 禁止编造   | "不得编造或推测"      |
-| **引用高亮和引用来源展示需求** | 引用来源   | "双星号高亮 + 来源展示" |
-| **结构化**           | 清晰输出   | "先回答，再引用"      |
-| **少量样本学习**        | 增加示例   | "示例回答格式"       |
+| **Role Definition** | Define the assistant's role | "Rigorous enterprise knowledge base assistant" |
+| **Boundary Constraint** | Limit response scope | "Only use information from the context" |
+| **Anti-Hallucination** | Prohibit fabrication | "Do not fabricate or speculate" |
+| **Citation & Source** | Require source attribution | "Double asterisks highlighting + source display" |
+| **Structured Output** | Clear output format | "Answer first, then cite" |
+| **Few-Shot Learning** | Provide examples | "Example answer format" |
 
 ---
 
-## 5. 如何避免 Hallucination（幻觉）
+## 5. Anti-Hallucination Strategies
 
-### 当前措施
+### Current Measures
 
-| 措施           | 实现位置            | 说明              |
+| Measure | Implementation | Description |
 |--------------|-----------------|-----------------|
-| **来源限定**     | Prompt 模板       | "仅使用上下文中的信息作答"  |
-| **未知声明**     | Prompt 模板       | "未能检索到相关内容"     |
-| **引用要求**     | Prompt 模板       | "双星号高亮 + 来源展示"  |
-| **Top-K 检索** | `ragService.py` | 返回多个相关片段，减少信息缺失 |
-| **增加相似度配置**  | SIMILARITY配置项   | 小于该相似度的不进行检索    |
+| **Source Limitation** | Prompt template | "Only answer using information from the context" |
+| **Unknown Declaration** | Prompt template | "No relevant content found" |
+| **Citation Requirement** | Prompt template | "Double asterisks highlighting + source display" |
+| **Top-K Retrieval** | `ragService.py` | Return multiple relevant chunks to reduce information gaps |
+| **Similarity Threshold** | SIMILARITY config | Skip retrieval when similarity is below the threshold |
 
-### 后续增强方案
+### Future Enhancements
 
-- 更改架构，改为Agentic RAG架构，使用ai agent进行增强，在检索完成后，增加检验agent，校验其内容是否出现幻觉
-
----
-
-## 6. 如果要支持 10 万 QPS，应如何优化？
-
-### 优化方案
-
-#### 1. 接入层优化（nginx请求分发到多个网关，并且配置防止ddos策略，并且使用Keepalived进行多nginx部署）
-
-#### 2. 缓存层优化（增加缓存优化，热点内容可以加入缓存）
-
-#### 3. 向量检索优化（集合拆分，即分表）
-
-#### 4. LLM 调用优化(复杂任务用准确率高的，简单任务用相应快的模型)
-
-#### 5. 嵌入模型优化（使用gpu部署模型）
-
-#### 6. 架构升级
-
-- 1.多节点部署，使用分布式架构，
-- 2.通过gateway网关进行负载均衡，配置合适的负载均衡策略
-- 3.数据库进行集群部署
+- Upgrade to Agentic RAG architecture with AI agents — add a verification agent after retrieval to check for hallucinated content.
 
 ---
 
-## 7. 如果 Embedding 模型升级，应如何平滑迁移？
+## 6. Scaling to 100K QPS
 
-### 迁移问题
+### Optimization Strategies
 
-| 问题        | 说明                 |
+#### 1. Gateway Layer Optimization
+Distribute requests via Nginx to multiple gateways, configure DDoS prevention, and deploy multiple Nginx instances with Keepalived.
+
+#### 2. Cache Layer Optimization
+Add caching for hot content to reduce repeated retrieval and LLM calls.
+
+#### 3. Vector Retrieval Optimization
+Split collections (sharding) for better retrieval throughput.
+
+#### 4. LLM Call Optimization
+Route complex tasks to high-accuracy models and simple tasks to fast-responding models.
+
+#### 5. Embedding Model Optimization
+Deploy embedding models on GPU for faster inference.
+
+#### 6. Architecture Upgrade
+- Multi-node deployment with distributed architecture.
+- Load balancing via API gateway with appropriate policies.
+- Database cluster deployment.
+
+---
+
+## 7. Smooth Embedding Model Migration
+
+### Migration Challenges
+
+| Challenge | Description |
 |-----------|--------------------|
-| **向量不兼容** | 新旧模型维度/分布不同，无法直接混用 |
-| **数据一致性** | 迁移过程中新旧数据并存        |
-| **服务中断**  | 全量重嵌入需要时间，可能影响服务   |
-| **回滚困难**  | 升级后发现问题，需要快速回退     |
+| **Vector Incompatibility** | New and old models produce different dimensions/distributions — vectors cannot be mixed directly |
+| **Data Consistency** | New and old data coexist during migration |
+| **Service Downtime** | Full re-embedding takes time and may impact service |
+| **Rollback Difficulty** | Need quick rollback if issues arise after upgrade |
 
-### 方案：双写 + 逐步迁移
+### Solution: Dual-Write + Gradual Migration
 
-步骤:
+Steps:
 
-- 1.创建新集合,该集合会使用新的Embedding模型
-- 2.更改代码，执行双写，即同一份数据使用旧模型写入旧集合中，并且使用新模型写入新集合中
-- 3.代码上线，记录双写开始的时间
-- 4.编写脚本，将双写开始时间前的数据使用新模型写入新集合中
-- 5.检查新旧集合，确认迁移无误
-- 6.更改代码，去除双写逻辑，全程使用新模型和新集合并上线
+- 1. Create a new collection that uses the new Embedding model.
+- 2. Modify code to perform dual-write: write data using the old model to the old collection and the new model to the new collection simultaneously.
+- 3. Deploy the updated code and record the dual-write start time.
+- 4. Write a script to backfill data from before the dual-write start time into the new collection using the new model.
+- 5. Verify both collections to confirm migration correctness.
+- 6. Remove dual-write logic, switch fully to the new model and new collection, and deploy.
 
-回滚方案
+Rollback Plan
 
-- 更改配置，切换回旧模型和旧集合
+- Update configuration to switch back to the old model and old collection.
 
-## 8.测试
+---
 
-- 1.问答接口测试
+## 8. Testing
+
+- 1. Q&A endpoint test
   ![img.png](img.png)
-- 2.文件上传测试
+- 2. File upload test
   ![img_1.png](img_1.png)
   ![img_2.png](img_2.png)
-- 3.统计token接口测试
+- 3. Token statistics endpoint test
   ![img_4.png](img_4.png)
-- 4.单元测试（运行tests下的单元测试即可）
+- 4. Unit tests (run tests under the `tests/` directory)
   ![img_3.png](img_3.png)
 
+---
 
-## 9.启动
-- 1.执行命令:sudo docker build -t rag-project:latest . 
-- 2.然后启动容器```sudo docker run -d \
+## 9. Getting Started
+
+- 1. Build the Docker image: `sudo docker build -t rag-project:latest .`
+- 2. Start the container:
+```bash
+sudo docker run -d \
   --name rag-app \
   -p 8000:8000 \
   -v $(pwd)/.env:/app/.env \
   -v $(pwd)/uploads:/app/uploads \
   -v $(pwd)/logs:/app/logs \
   --restart unless-stopped \
-  rag-project:latest```
+  rag-project:latest
+```
